@@ -259,6 +259,15 @@ class LeadUpdate(BaseModel):
     next_follow_up_at: datetime | None = None
 
 
+class ContactUpdate(BaseModel):
+    name: str | None = Field(None, max_length=100)
+    email: EmailStr | None = None
+    phone_e164: Phone | None = None
+    phone_country: CountryCode | None = None
+    company: str | None = None
+    timezone: str | None = None
+
+
 class NoteCreate(BaseModel):
     body: str = Field(min_length=1, max_length=5000)
 

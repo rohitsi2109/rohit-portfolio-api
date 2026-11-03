@@ -10,7 +10,7 @@ py -3.12 -m venv .venv
 .venv/Scripts/pip install -r requirements-dev.txt     # macOS/Linux: .venv/bin/pip
 cp .env.example .env                                   # fill in the Neon dev-branch strings
 .venv/Scripts/alembic upgrade head                     # creates the schema (uses DATABASE_URL_DIRECT)
-.venv/Scripts/python -m app.cli create-admin --email you@example.com --name "Rohit Singh"
+.venv/Scripts/python -m app.cli create-admin --email rohitsi2104@gmail.com --name "Rohit Singh"   # not the public site email
 .venv/Scripts/uvicorn app.main:app --reload --port 8000
 ```
 

@@ -95,7 +95,9 @@ def slots(start: str = "", end: str = "", timeZone: str = "UTC"):
 
 
 @router.post("/v1/bookings", response_model=BookingResult,
-             dependencies=[Depends(limit_by_ip("booking", limit=5, window_seconds=3600))])
+             # 10, not 5: failed attempts count too (e.g. a slot taken a moment earlier),
+             # and a real visitor may try several slots
+             dependencies=[Depends(limit_by_ip("booking", limit=10, window_seconds=3600))])
 def create_booking(body: BookingRequest, request: Request, db: Session = Depends(get_db)):
     name = body.name.strip()
     email = body.email.strip()

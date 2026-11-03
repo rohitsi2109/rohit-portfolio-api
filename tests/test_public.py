@@ -85,16 +85,16 @@ def test_website_fills_in_empty_contact_fields(client, db):
 
 
 def test_bookings_are_rate_limited(client, fake_cal):
-    for i in range(5):
+    for i in range(10):
         assert client.post("/v1/bookings", json=booking_body(email=f"p{i}@example.com")).status_code == 200
-    res = client.post("/v1/bookings", json=booking_body(email="p6@example.com"))
+    res = client.post("/v1/bookings", json=booking_body(email="p11@example.com"))
     assert res.status_code == 429 and res.headers["retry-after"] == "3600"
     assert "Too many attempts" in res.json()["error"]
     # A different visitor is unaffected
-    res = client.post("/v1/bookings", json=booking_body(email="p7@example.com"),
+    res = client.post("/v1/bookings", json=booking_body(email="p12@example.com"),
                       headers={"x-forwarded-for": "203.0.113.9"})
     assert res.status_code == 200
-    assert len(fake_cal.bookings) == 6
+    assert len(fake_cal.bookings) == 11
 
 
 def test_rate_limit_stores_no_raw_ip(client, db, fake_cal):

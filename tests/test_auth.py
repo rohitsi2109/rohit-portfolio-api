@@ -1,4 +1,4 @@
-from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD
+from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD, booking_body
 
 
 def login(client):
@@ -48,6 +48,20 @@ def test_login_is_rate_limited_per_account_across_ips(client, admin_user):
     res = client.post("/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                       headers={"x-forwarded-for": "198.51.100.200"})
     assert res.status_code == 429
+
+
+def test_edit_contact(client, auth, fake_cal):
+    client.post("/v1/bookings", json=booking_body())
+    client.post("/v1/bookings", json=booking_body(email="other@example.com"))
+    lead = client.get("/v1/admin/leads", headers=auth, params={"q": "jane@"}).json()["items"][0]
+    url = f"/v1/admin/contacts/{lead['contact']['id']}"
+
+    res = client.patch(url, headers=auth, json={"name": "Jane Doe", "timezone": "Asia/Singapore"})
+    assert res.status_code == 200 and res.json()["name"] == "Jane Doe" and res.json()["timezone"] == "Asia/Singapore"
+    assert client.patch(url, headers=auth, json={"timezone": "Mars/Base"}).status_code == 422
+    assert client.patch(url, headers=auth, json={"name": None}).status_code == 422
+    assert client.patch(url, headers=auth, json={"email": "other@example.com"}).status_code == 409
+    assert client.patch(url, headers=auth, json={"email": None, "phone_e164": None}).status_code == 422
 
 
 def test_logout(client, admin_user):

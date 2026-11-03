@@ -132,9 +132,12 @@ because webhooks upsert by `cal_booking_uid`.
 | POST | `/v1/admin/leads/{id}/contacted` | Sets `last_contacted_at` and logs an event (tapped call / WhatsApp / email in the app) |
 | GET | `/v1/admin/stats?from&to` | Leads by status, channel, source and country; conversion rate; average response time; lost reasons; proposal win rate; money received / outstanding per currency; top referring clients |
 | POST | `/v1/admin/devices` | Register an FCM token |
+| PATCH | `/v1/admin/contacts/{id}` | Correct name, email, phone, company, timezone (the website never changes an existing contact) |
 | DELETE | `/v1/admin/contacts/{id}` | Privacy erasure |
 
 The first admin user is created with a one-off CLI command (`python -m app.cli create-admin`).
+Use an email that is **not** published on the website (not connect@rohitsingh.in): the per-account
+login limit means anyone who knows the admin email can lock it out for an hour.
 There is no public sign-up endpoint.
 
 ## 4. Repository layout
@@ -203,8 +206,8 @@ app must never send two refreshes at once (e.g. two API calls both getting a 401
 ### Rate limits (built into the API)
 
 Counted in Postgres (`rate_limits`), keyed by a hash of the IP or email; exceeding one returns
-`429` with `Retry-After`. Login: 10 per 15 min per IP and 20 per hour per account. Bookings and
-enquiries: 5 per hour per IP. Refresh: 30 per 15 min per IP. If the database is down, the limits
+`429` with `Retry-After`. Login: 10 per 15 min per IP and 20 per hour per account. Bookings: 10 per
+hour per IP (failed attempts count, so a visitor can retry a few slots). Enquiries: 5 per hour per IP. Refresh: 30 per 15 min per IP. If the database is down, the limits
 are skipped, so bookings still go through.
 
 ## 7. Operations (after phase 2)

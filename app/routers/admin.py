@@ -6,6 +6,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import and_, case, column, func, or_, select, table, true, tuple_
@@ -32,6 +33,8 @@ from app.schemas import (
     ClientSummaryOut,
     ClientUpdate,
     ContactedRequest,
+    ContactOut,
+    ContactUpdate,
     ConvertRequest,
     ConvertResult,
     DeviceRegister,
@@ -576,6 +579,31 @@ def register_device(body: DeviceRegister, db: Session = Depends(get_db), admin: 
     db.execute(stmt)
     db.commit()
     return Response(status_code=204)
+
+
+@router.patch("/contacts/{contact_id}", response_model=ContactOut)
+def update_contact(contact_id: uuid.UUID, body: ContactUpdate, db: Session = Depends(get_db), _: AdminUser = Admin):
+    """Correct a contact's details. The website never changes an existing contact, so this is how
+    a new name, number or time zone (often visible on a lead's submitted_* fields) gets applied."""
+    contact = get_or_404(db, Contact, contact_id, "Contact")
+    changes = body.model_dump(exclude_unset=True)
+    if "name" in changes and not changes["name"]:
+        raise HTTPException(422, "name cannot be empty")
+    if "timezone" in changes and changes["timezone"]:
+        try:
+            ZoneInfo(changes["timezone"])
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(422, "Unknown time zone")
+    for field, value in changes.items():
+        setattr(contact, field, value)
+    if contact.email is None and contact.phone_e164 is None:
+        raise HTTPException(422, "A contact needs an email or a phone number")
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Another contact already has this email")
+    return contact
 
 
 @router.delete("/contacts/{contact_id}", status_code=204)

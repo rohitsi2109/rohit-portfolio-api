@@ -69,6 +69,9 @@ class Lead(Base):
     temperature: Mapped[str | None] = mapped_column(Text)
     converted_at: Mapped[datetime | None]
 
+    submitted_name: Mapped[str | None] = mapped_column(Text)
+    submitted_phone: Mapped[str | None] = mapped_column(Text)
+    submitted_company: Mapped[str | None] = mapped_column(Text)
     message: Mapped[str | None] = mapped_column(Text)
     budget_range: Mapped[str | None] = mapped_column(Text)
     estimated_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
@@ -271,6 +274,14 @@ class LeadEvent(Base):
     admin_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admin_users.id", ondelete="SET NULL"))
     data: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}", default=dict)
     created_at: Mapped[datetime] = created_at()
+
+
+class RateLimit(Base):
+    __tablename__ = "rate_limits"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(primary_key=True)
+    hits: Mapped[int] = mapped_column(server_default="1", default=1)
 
 
 class WebhookEvent(Base):

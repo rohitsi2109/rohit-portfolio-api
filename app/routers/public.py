@@ -17,6 +17,7 @@ from app.db import get_db
 from app.models import Booking
 from app.schemas import BookingRequest, BookingResult, EnquiryRequest
 from app.services import cal, push
+from app.services.ratelimit import limit_by_ip
 from app.services.leads import (
     WebsiteLead,
     attach_confirmed_booking,
@@ -93,7 +94,8 @@ def slots(start: str = "", end: str = "", timeZone: str = "UTC"):
     return JSONResponse({"slots": data}, headers={"Cache-Control": "s-maxage=60, stale-while-revalidate=300"})
 
 
-@router.post("/v1/bookings", response_model=BookingResult)
+@router.post("/v1/bookings", response_model=BookingResult,
+             dependencies=[Depends(limit_by_ip("booking", limit=5, window_seconds=3600))])
 def create_booking(body: BookingRequest, request: Request, db: Session = Depends(get_db)):
     name = body.name.strip()
     email = body.email.strip()
@@ -120,6 +122,9 @@ def create_booking(body: BookingRequest, request: Request, db: Session = Depends
     phone_country = country_code(body.phoneCountry)
     w = WebsiteLead(
         type="booking",
+        name=name,
+        phone=phone,
+        company=None,
         message=notes,
         attribution=body.attribution,
         consent_version=consent_version(body.consentVersion),
@@ -174,7 +179,7 @@ def create_booking(body: BookingRequest, request: Request, db: Session = Depends
     return BookingResult(uid=booking.uid, start=booking.start, end=booking.end, meetingUrl=booking.meeting_url)
 
 
-@router.post("/v1/enquiries")
+@router.post("/v1/enquiries", dependencies=[Depends(limit_by_ip("enquiry", limit=5, window_seconds=3600))])
 def create_enquiry(body: EnquiryRequest, request: Request, db: Session = Depends(get_db)):
     name = body.name.strip()
     email = body.email.strip()
@@ -196,6 +201,9 @@ def create_enquiry(body: EnquiryRequest, request: Request, db: Session = Depends
 
     w = WebsiteLead(
         type="enquiry",
+        name=name,
+        phone=phone,
+        company=company,
         message=message,
         attribution=body.attribution,
         consent_version=consent_version(body.consentVersion),

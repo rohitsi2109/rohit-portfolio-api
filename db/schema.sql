@@ -74,6 +74,12 @@ CREATE TABLE leads (
     temperature         text        CHECK (temperature IN ('hot', 'warm', 'cold')),
     converted_at        timestamptz,                 -- set when status becomes 'won'
 
+    -- Exactly what was typed on the website for this lead. The website never overwrites an
+    -- existing contact's details (anyone can type anyone's email), so they're kept here.
+    submitted_name      text,
+    submitted_phone     text,
+    submitted_company   text,
+
     message             text        CHECK (char_length(message) <= 2000),  -- "What would you like to build?"
     budget_range        text,                        -- enquiry form (phase 4), e.g. 'AUD 2k-5k'
     estimated_value     numeric(12,2),               -- set by admin when qualifying
@@ -262,7 +268,8 @@ CREATE TRIGGER projects_updated_at BEFORE UPDATE ON projects
 
 -- Money in: deposits, milestones, final payments for a project.
 -- "Overdue" is not stored; it's computed (status 'pending' and due_on < today),
--- so it can never go stale.
+-- so it can never go stale. "Today" is the date in India (Asia/Kolkata), not UTC,
+-- so payments turn overdue at midnight IST.
 CREATE TABLE payments (
     id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id      uuid        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -341,7 +348,8 @@ CROSS JOIN LATERAL (
         SELECT pm.currency,
                coalesce(sum(pm.amount) FILTER (WHERE pm.status = 'paid'), 0)    AS paid,
                coalesce(sum(pm.amount) FILTER (WHERE pm.status = 'pending'), 0) AS outstanding,
-               coalesce(sum(pm.amount) FILTER (WHERE pm.status = 'pending' AND pm.due_on < current_date), 0) AS overdue
+               coalesce(sum(pm.amount) FILTER (WHERE pm.status = 'pending'
+                                                 AND pm.due_on < (now() AT TIME ZONE 'Asia/Kolkata')::date), 0) AS overdue
         FROM payments pm
         JOIN projects p ON p.id = pm.project_id
         WHERE p.client_id = cl.id
@@ -448,3 +456,18 @@ CREATE TABLE webhook_events (
 );
 
 CREATE INDEX webhook_events_unprocessed_idx ON webhook_events (received_at) WHERE processed_at IS NULL;
+
+
+-- =============================================================================
+-- RATE LIMITS: request counters per fixed time window (login, booking, enquiry)
+-- The key is a keyed hash, never a raw IP address or email. Rows older than a
+-- day are deleted by the API as it goes.
+-- =============================================================================
+CREATE TABLE rate_limits (
+    key             text        NOT NULL,            -- sha256(secret, scope, ip-or-email)
+    window_start    timestamptz NOT NULL,
+    hits            integer     NOT NULL DEFAULT 1,
+    PRIMARY KEY (key, window_start)
+);
+
+CREATE INDEX rate_limits_window_idx ON rate_limits (window_start);

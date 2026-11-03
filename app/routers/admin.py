@@ -60,6 +60,7 @@ from app.schemas import (
     Temperature,
 )
 from app.services.leads import OPEN_STATUSES, convert_lead, log_event, mark_contacted, now
+from app.services.leads import today as local_today
 from app.services.security import current_admin
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -426,7 +427,7 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: Session = Dep
             raise HTTPException(422, f"{field} cannot be empty")
         setattr(project, field, value)
     if project.status == "completed" and project.completed_on is None:
-        project.completed_on = date.today()
+        project.completed_on = local_today()
     db.commit()
     return ProjectOut.model_validate(project)
 
@@ -450,7 +451,7 @@ def update_payment(payment_id: uuid.UUID, body: PaymentUpdate, db: Session = Dep
     for field, value in changes.items():
         setattr(payment, field, value)
     if payment.status == "paid" and payment.paid_on is None:
-        payment.paid_on = date.today()
+        payment.paid_on = local_today()
     if payment.status != "paid":
         payment.paid_on = None
     db.commit()
@@ -462,7 +463,7 @@ def list_payments(db: Session = Depends(get_db), _: AdminUser = Admin,
                   state: Literal["overdue", "due_soon", "pending", "received"] = "pending",
                   due_soon_days: int = Query(14, ge=1, le=90),
                   received_since: date | None = Query(None, description="state=received only; default: 90 days ago")):
-    today = date.today()
+    today = local_today()
     stmt = (select(Payment, Project.title, Client.id, Contact.name)
             .join(Project, Payment.project_id == Project.id)
             .join(Client, Project.client_id == Client.id)

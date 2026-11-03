@@ -2,13 +2,15 @@
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import AdminUser, Booking, Client, Contact, Lead, LeadEvent, Project
 from app.schemas import Attribution, ConvertRequest, ConvertResult
 
@@ -30,6 +32,11 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+def today() -> date:
+    """Today's date where the business runs (IST), so due dates change over at local midnight."""
+    return datetime.now(ZoneInfo(get_settings().business_timezone)).date()
+
+
 def log_event(db: Session, lead_id: uuid.UUID, type_: str, actor: str,
               data: dict[str, Any] | None = None, admin: AdminUser | None = None) -> None:
     db.add(LeadEvent(lead_id=lead_id, type=type_, actor=actor, data=data or {},
@@ -39,13 +46,17 @@ def log_event(db: Session, lead_id: uuid.UUID, type_: str, actor: str,
 def upsert_contact(db: Session, *, email: str, name: str, phone: str | None = None,
                    phone_country: str | None = None, timezone: str | None = None,
                    company: str | None = None) -> uuid.UUID:
-    """Find the contact by email (case-insensitive) and refresh their details, or create them."""
+    """Find the contact by email (case-insensitive), or create them.
+
+    For an existing contact this only fills in fields that are empty. Anyone can type anyone's
+    email into the website, so a submission must never overwrite a known contact's name, phone
+    or company; what was typed is kept on the lead instead (submitted_*)."""
     values = {"email": email, "name": name, "phone_e164": phone, "phone_country": phone_country,
               "timezone": timezone, "company": company}
     stmt = insert(Contact).values(id=uuid.uuid4(), **values)
-    # Only overwrite with values we actually have (an enquiry without a phone keeps the old phone)
-    refresh = {k: stmt.excluded[k] for k, v in values.items() if v is not None and k != "email"}
-    stmt = stmt.on_conflict_do_update(index_elements=[Contact.email], set_=refresh).returning(Contact.id)
+    fill_empty = {k: func.coalesce(getattr(Contact, k), stmt.excluded[k])
+                  for k in values if k not in ("email", "name")}
+    stmt = stmt.on_conflict_do_update(index_elements=[Contact.email], set_=fill_empty).returning(Contact.id)
     return db.execute(stmt).scalar_one()
 
 
@@ -53,6 +64,9 @@ def upsert_contact(db: Session, *, email: str, name: str, phone: str | None = No
 class WebsiteLead:
     """Everything the website sends about a visitor, as stored on the lead."""
     type: str  # 'booking' | 'enquiry'
+    name: str
+    phone: str | None
+    company: str | None
     message: str | None
     attribution: Attribution | None
     consent_version: str
@@ -70,6 +84,9 @@ def create_website_lead(db: Session, lead_id: uuid.UUID, contact_id: uuid.UUID, 
         source_channel="website",
         status="new",
         tags=[],
+        submitted_name=w.name,
+        submitted_phone=w.phone,
+        submitted_company=w.company,
         message=w.message or None,
         budget_range=w.budget_range,
         visitor_country=w.visitor_country,

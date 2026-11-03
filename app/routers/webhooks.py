@@ -178,12 +178,15 @@ def booking_created(db: Session, p: dict[str, Any], created_at: datetime) -> str
     if not email:
         return "ignored: no attendee email"
     phone = attendee.get("phoneNumber") or response_value(p, "attendeePhoneNumber")
-    contact_id = upsert_contact(
-        db, email=email, name=(attendee.get("name") or email)[:100],
-        phone=phone if phone and PHONE.match(phone) else None,
-        phone_country=country_code(meta.get("phoneCountry")), timezone=timezone)
+    phone = phone if phone and PHONE.match(phone) else None
+    name = (attendee.get("name") or email)[:100]
+    contact_id = upsert_contact(db, email=email, name=name, phone=phone,
+                                phone_country=country_code(meta.get("phoneCountry")), timezone=timezone)
     w = WebsiteLead(
         type="booking",
+        name=name,
+        phone=phone,
+        company=None,
         message=(response_value(p, "notes") or "")[:2000],
         attribution=Attribution(**{k: meta.get(k) for k in ATTRIBUTION_COLUMNS}),
         consent_version=meta.get("consentVersion") or get_settings().consent_version,

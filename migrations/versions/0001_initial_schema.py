@@ -1,4 +1,4 @@
-"""Initial schema: db/schema.sql
+"""Initial schema (db/schema.sql as of v1)
 
 Revision ID: 0001
 Revises:
@@ -13,7 +13,9 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-SCHEMA = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
+# A frozen copy of db/schema.sql as of this revision. db/schema.sql keeps describing the
+# current schema; later changes go in later migrations.
+SCHEMA = Path(__file__).with_suffix(".sql")
 
 TABLES = [
     "webhook_events", "lead_events", "lead_notes", "push_devices", "refresh_tokens", "admin_users",

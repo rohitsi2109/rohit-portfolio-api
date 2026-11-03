@@ -1,10 +1,20 @@
-from sqlalchemy import select
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
-from app.models import Booking, Contact, Lead, LeadEvent
+from app.models import Booking, Contact, Lead, LeadEvent, RateLimit
 from app.routers import public
 from app.services import cal
+from app.services.leads import today
 from tests.conftest import booking_body
+
+
+def test_api_and_database_agree_on_today_in_ist(db):
+    # Overdue is decided in Python (payments list) and in SQL (client_summary); both use IST
+    db_today = db.scalar(text("SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date"))
+    assert today() == db_today == datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
 
 def test_health(client):
@@ -52,8 +62,45 @@ def test_returning_visitor_is_one_contact(client, db, fake_cal):
     client.post("/v1/bookings", json=booking_body())
     client.post("/v1/bookings", json=booking_body(email="JANE@example.com", name="Jane S."))
     contacts = db.scalars(select(Contact)).all()
-    assert len(contacts) == 1 and contacts[0].name == "Jane S."
+    assert len(contacts) == 1
     assert len(db.scalars(select(Lead)).all()) == 2
+
+
+def test_website_never_overwrites_a_contact(client, db, fake_cal):
+    # Anyone can type a known client's email; their stored details must survive
+    client.post("/v1/bookings", json=booking_body())
+    client.post("/v1/bookings", json=booking_body(name="Impostor", phone="+61499999999"))
+    contact = db.scalar(select(Contact))
+    assert (contact.name, contact.phone_e164) == ("Jane Smith", "+61412345678")
+    latest = db.scalar(select(Lead).where(Lead.submitted_name == "Impostor"))
+    assert latest.submitted_phone == "+61499999999"  # what was typed is kept on the lead
+
+
+def test_website_fills_in_empty_contact_fields(client, db):
+    client.post("/v1/enquiries", json={"name": "Sam", "email": "sam@example.com", "message": "Hi"})
+    client.post("/v1/enquiries", json={"name": "Sam", "email": "sam@example.com", "message": "Again",
+                                       "phone": "+6591234567", "company": "Sam's Gym"})
+    contact = db.scalar(select(Contact))
+    assert (contact.phone_e164, contact.company) == ("+6591234567", "Sam's Gym")
+
+
+def test_bookings_are_rate_limited(client, fake_cal):
+    for i in range(5):
+        assert client.post("/v1/bookings", json=booking_body(email=f"p{i}@example.com")).status_code == 200
+    res = client.post("/v1/bookings", json=booking_body(email="p6@example.com"))
+    assert res.status_code == 429 and res.headers["retry-after"] == "3600"
+    assert "Too many attempts" in res.json()["error"]
+    # A different visitor is unaffected
+    res = client.post("/v1/bookings", json=booking_body(email="p7@example.com"),
+                      headers={"x-forwarded-for": "203.0.113.9"})
+    assert res.status_code == 200
+    assert len(fake_cal.bookings) == 6
+
+
+def test_rate_limit_stores_no_raw_ip(client, db, fake_cal):
+    client.post("/v1/bookings", json=booking_body(), headers={"x-forwarded-for": "203.0.113.7"})
+    keys = db.scalars(select(RateLimit.key)).all()
+    assert keys and all("203.0.113.7" not in k and len(k) == 64 for k in keys)
 
 
 def test_booking_validation_messages(client, fake_cal):

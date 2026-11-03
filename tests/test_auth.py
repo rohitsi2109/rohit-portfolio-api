@@ -33,6 +33,23 @@ def test_refresh_rotates_and_detects_reuse(client, admin_user):
     assert client.post("/v1/auth/refresh", json={"refresh_token": second["refresh_token"]}).status_code == 401
 
 
+def test_login_is_rate_limited(client, admin_user):
+    for _ in range(10):
+        client.post("/v1/auth/login", json={"email": ADMIN_EMAIL, "password": "guess"})
+    # Even the right password is refused until the window passes
+    res = client.post("/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+    assert res.status_code == 429
+
+
+def test_login_is_rate_limited_per_account_across_ips(client, admin_user):
+    for i in range(20):
+        client.post("/v1/auth/login", json={"email": ADMIN_EMAIL, "password": "guess"},
+                    headers={"x-forwarded-for": f"198.51.100.{i}"})
+    res = client.post("/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+                      headers={"x-forwarded-for": "198.51.100.200"})
+    assert res.status_code == 429
+
+
 def test_logout(client, admin_user):
     tokens = login(client)
     assert client.post("/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}).status_code == 204

@@ -38,7 +38,7 @@ from app.services.security import hash_password  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABLES = ("webhook_events, lead_events, lead_notes, push_devices, refresh_tokens, admin_users, payments, "
-          "projects, proposals, bookings, leads, clients, contacts")
+          "projects, proposals, bookings, leads, clients, contacts, rate_limits")
 
 
 @pytest.fixture(scope="session", autouse=True)

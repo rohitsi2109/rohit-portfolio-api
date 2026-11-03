@@ -92,7 +92,9 @@ or project; those are removed by hand.
 
 **`POST /v1/bookings` flow:**
 1. Validate the input. If the hidden honeypot field is filled, return a fake success and save nothing.
-2. Upsert the `contact` by email (refresh name, phone and timezone).
+2. Find or create the `contact` by email. An existing contact's details are **never overwritten**
+   (anyone can type anyone's email); only empty fields are filled in. What was typed is stored on
+   the lead (`submitted_name`, `submitted_phone`, `submitted_company`).
 3. Insert the `lead` (`type=booking`, `status=new`) and a `lead_created` event, and **commit**
    (so a `BOOKING_CREATED` webhook that races ahead of this request always finds the lead).
 4. Call Cal.com to create the booking, passing the lead id, consent and attribution as booking metadata.
@@ -187,6 +189,23 @@ rohit-portfolio-api/
 | **3. Pipeline + Clients** | Status and hot/warm/cold markers, tags, "Add lead" (manual), proposals, "Convert to client", Clients tab with projects, payments and money owed, referrals, notes, follow-up dates, filters | You can run your whole sales pipeline and money from the app, and every converted lead sits in Clients |
 | **4. Insights + enquiries** | Stats screen, "message without a call" form, CSV export | You can see which channels bring clients and how fast you reply |
 | **5. Operations** | Automated backups, data clean-up, daily reminder push (section 7) | Data is safe, privacy-compliant, and nothing slips |
+
+### Flutter app: token refresh rule (phase 2)
+
+The API treats a reused refresh token as stolen and **ends every session** for that admin. So the
+app must never send two refreshes at once (e.g. two API calls both getting a 401 at the same moment):
+- Run refresh through a **single-flight lock**: the first caller refreshes; any others wait for that
+  same result and retry with the new access token.
+- Save the new refresh token (secure storage) **before** releasing the lock, so no caller ever sends
+  the old one again.
+- If the refresh itself returns 401, go to the login screen; don't retry.
+
+### Rate limits (built into the API)
+
+Counted in Postgres (`rate_limits`), keyed by a hash of the IP or email; exceeding one returns
+`429` with `Retry-After`. Login: 10 per 15 min per IP and 20 per hour per account. Bookings and
+enquiries: 5 per hour per IP. Refresh: 30 per 15 min per IP. If the database is down, the limits
+are skipped, so bookings still go through.
 
 ## 7. Operations (after phase 2)
 

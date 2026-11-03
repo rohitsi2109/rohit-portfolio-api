@@ -1,0 +1,16 @@
+# Neon CLI config (neon.ts and its npm package) is for local use only. Without this, Vercel
+# would see package.json and treat this Python API as a Node project.
+package.json
+package-lock.json
+node_modules
+neon.ts
+.neon
+
+# Not needed at runtime
+tests
+migrations
+alembic.ini
+db
+docs
+.venv
+.env*

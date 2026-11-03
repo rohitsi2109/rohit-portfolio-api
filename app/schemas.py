@@ -200,6 +200,10 @@ class LeadPage(BaseModel):
 
 
 class LeadDetail(LeadFields):
+    # What the visitor typed; can differ from the contact's stored details
+    submitted_name: str | None
+    submitted_phone: str | None
+    submitted_company: str | None
     utm_source: str | None
     utm_medium: str | None
     utm_campaign: str | None

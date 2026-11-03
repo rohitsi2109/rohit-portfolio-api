@@ -23,6 +23,8 @@ class Settings(BaseSettings):
 
     cors_origins: str = "https://rohitsingh.in,https://www.rohitsingh.in,http://localhost:5179"
     consent_version: str = "privacy-2026-11"
+    # "Today" for due dates and overdue payments (the client_summary view uses the same zone)
+    business_timezone: str = "Asia/Kolkata"
 
     firebase_service_account: str = ""
 

@@ -17,6 +17,11 @@ def test_api_and_database_agree_on_today_in_ist(db):
     assert today() == db_today == datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
 
+def test_unknown_route_uses_the_error_shape(client):
+    res = client.get("/no-such-route")
+    assert res.status_code == 404 and res.json() == {"error": "Not Found"}
+
+
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok", "db": "ok"}
 

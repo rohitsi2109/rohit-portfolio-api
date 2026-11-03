@@ -1,5 +1,4 @@
 {
     "regions": ["sin1"],
-    "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
     "crons": [{ "path": "/v1/cron/daily-brief", "schedule": "30 17 * * *" }]
 }

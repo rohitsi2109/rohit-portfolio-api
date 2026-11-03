@@ -1,9 +1,10 @@
 import logging
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
 from app.routers import admin, auth, cron, public, webhooks
@@ -22,9 +23,10 @@ def create_app() -> FastAPI:
         max_age=86400,
     )
 
-    # One error shape everywhere: {"error": "<message>"} (+ "fields" for validation errors)
-    @app.exception_handler(HTTPException)
-    async def http_error(_: Request, exc: HTTPException):
+    # One error shape everywhere: {"error": "<message>"} (+ "fields" for validation errors).
+    # Starlette's HTTPException also covers its own 404 / 405 for unknown routes.
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(_: Request, exc: StarletteHTTPException):
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)

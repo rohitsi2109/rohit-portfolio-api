@@ -176,7 +176,7 @@ def create_booking(body: BookingRequest, request: Request, db: Session = Depends
         except SQLAlchemyError:
             log.exception("booking: could not save booking %s for lead %s", booking.uid, lead_id)
             db.rollback()
-        push.notify_new_lead(lead_id, f"New booking: {name}", start.isoformat())
+        push.send(push.new_booking_notice(lead_id, name, phone_country, start, notes))
 
     return BookingResult(uid=booking.uid, start=booking.start, end=booking.end, meetingUrl=booking.meeting_url)
 

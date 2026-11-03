@@ -7,4 +7,6 @@ alembic==1.15.2
 httpx==0.28.1
 argon2-cffi==23.1.0
 pyjwt==2.10.1
+# RS256 signing for the Firebase service-account token (PyJWT needs it)
+cryptography==44.0.3
 tzdata==2025.2

@@ -85,8 +85,9 @@ def handle_webhook(raw: bytes, signature: str | None, db: Session) -> dict[str, 
         event_id = existing.id  # stored earlier but never processed: try again
     db.commit()
 
+    notices: list[push.Notice] = []
     try:
-        result = process(db, event_type, payload, parse_instant(str(body.get("createdAt") or "")) or now())
+        result = process(db, event_type, payload, parse_instant(str(body.get("createdAt") or "")) or now(), notices)
         event = db.get(WebhookEvent, event_id)
         event.processed_at = now()
         event.error = None
@@ -98,10 +99,15 @@ def handle_webhook(raw: bytes, signature: str | None, db: Session) -> dict[str, 
         event.error = f"{type(e).__name__}: {e}"[:2000]
         db.commit()
         raise HTTPException(500, "Webhook processing failed")
+    # Only after the commit, so a rolled-back change never sends a notification
+    for notice in notices:
+        push.send(notice)
     return {"ok": True, "result": result}
 
 
-def process(db: Session, event_type: str, p: dict[str, Any], created_at: datetime) -> str:
+def process(db: Session, event_type: str, p: dict[str, Any], created_at: datetime,
+            notices: list[push.Notice]) -> str:
+    """Apply one event. Handlers queue notifications in `notices`; the caller sends them after committing."""
     handler = {
         "BOOKING_CREATED": booking_created,
         "BOOKING_CANCELLED": booking_cancelled,
@@ -111,7 +117,7 @@ def process(db: Session, event_type: str, p: dict[str, Any], created_at: datetim
     }.get(event_type)
     if handler is None:
         return f"ignored: {event_type}"
-    return handler(db, p, created_at)
+    return handler(db, p, created_at, notices)
 
 
 # --- payload helpers ---------------------------------------------------------
@@ -150,7 +156,7 @@ def parse_uuid(value: Any) -> uuid.UUID | None:
 
 # --- handlers ----------------------------------------------------------------
 
-def booking_created(db: Session, p: dict[str, Any], created_at: datetime) -> str:
+def booking_created(db: Session, p: dict[str, Any], created_at: datetime, notices: list[push.Notice]) -> str:
     uid = p.get("uid")
     start = parse_instant(str(p.get("startTime") or ""))
     if not uid or start is None:
@@ -196,12 +202,11 @@ def booking_created(db: Session, p: dict[str, Any], created_at: datetime) -> str
     lead_id = lead_id or uuid.uuid4()
     create_website_lead(db, lead_id, contact_id, w)
     attach_confirmed_booking(db, lead_id=lead_id, **booking_args)
-    db.flush()
-    push.notify_new_lead(lead_id, f"New booking: {attendee.get('name') or email}", start.isoformat())
+    notices.append(push.new_booking_notice(lead_id, name, country_code(meta.get("phoneCountry")), start, w.message))
     return "lead backfilled"
 
 
-def booking_cancelled(db: Session, p: dict[str, Any], _: datetime) -> str:
+def booking_cancelled(db: Session, p: dict[str, Any], _: datetime, notices: list[push.Notice]) -> str:
     booking = booking_by_uid(db, p.get("uid"))
     if booking is None:
         return "unknown booking"
@@ -211,10 +216,13 @@ def booking_cancelled(db: Session, p: dict[str, Any], _: datetime) -> str:
     booking.cancellation_reason = p.get("cancellationReason") or None
     log_event(db, booking.lead_id, "booking_cancelled", ACTOR,
               {"cal_booking_uid": booking.cal_booking_uid, "reason": booking.cancellation_reason})
+    reason = f" · {booking.cancellation_reason}" if booking.cancellation_reason else ""
+    notices.append(push.booking_notice(booking.lead_id, "booking_cancelled", f"Call cancelled: {booking.lead.contact.name}",
+                                  f"Was {push.local_time(booking.start_at)} IST{reason}"))
     return "cancelled"
 
 
-def booking_rescheduled(db: Session, p: dict[str, Any], _: datetime) -> str:
+def booking_rescheduled(db: Session, p: dict[str, Any], _: datetime, notices: list[push.Notice]) -> str:
     new_uid = p.get("uid")
     start = parse_instant(str(p.get("startTime") or ""))
     old = booking_by_uid(db, p.get("rescheduleUid") or p.get("fromReschedule"))
@@ -226,10 +234,12 @@ def booking_rescheduled(db: Session, p: dict[str, Any], _: datetime) -> str:
         end_at=parse_instant(str(p.get("endTime") or "")),
         timezone=first_attendee(p).get("timeZone") or old.attendee_timezone,
         meeting_url=meeting_url(p) or old.meeting_url, actor=ACTOR, rescheduled_from_id=old.id)
+    notices.append(push.booking_notice(old.lead_id, "booking_rescheduled", f"Call moved: {old.lead.contact.name}",
+                                  f"Now {push.local_time(start)} IST (was {push.local_time(old.start_at)})"))
     return "rescheduled"
 
 
-def meeting_ended(db: Session, p: dict[str, Any], _: datetime) -> str:
+def meeting_ended(db: Session, p: dict[str, Any], _: datetime, notices: list[push.Notice]) -> str:
     booking = booking_by_uid(db, p.get("uid"))
     if booking is None or booking.status != "confirmed":
         return "no confirmed booking"
@@ -238,7 +248,7 @@ def meeting_ended(db: Session, p: dict[str, Any], _: datetime) -> str:
     return "completed"
 
 
-def no_show_updated(db: Session, p: dict[str, Any], _: datetime) -> str:
+def no_show_updated(db: Session, p: dict[str, Any], _: datetime, notices: list[push.Notice]) -> str:
     booking = booking_by_uid(db, p.get("bookingUid") or p.get("uid"))
     if booking is None:
         return "unknown booking"

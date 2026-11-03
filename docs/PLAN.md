@@ -156,7 +156,7 @@ rohit-portfolio-api/
 │   ├── models.py             # SQLAlchemy models (mirror db/schema.sql)
 │   ├── schemas.py            # Pydantic request/response models
 │   ├── routers/              # public.py, admin.py, auth.py, webhooks.py
-│   ├── services/             # cal.py, leads.py, push.py, security.py
+│   ├── services/             # cal.py, leads.py, push.py, ratelimit.py, security.py
 │   └── cli.py                # create-admin
 ├── migrations/               # Alembic; 0001 = db/schema.sql
 ├── tests/                    # pytest: validation, booking flow (Cal mocked), auth, webhooks
@@ -219,7 +219,22 @@ are skipped, so bookings still go through.
 
 1. **Backups.** A weekly GitHub Actions workflow runs `pg_dump` against Neon and stores the encrypted dump in private storage (e.g. a private Cloudflare R2 bucket), keeping the last 12. Neon's free point-in-time restore window is short, and this database becomes your record of clients and money. Test a restore once.
 2. **Data clean-up (privacy).** A monthly Vercel Cron job deletes contacts whose leads **never converted** and haven't been touched for **24 months**, and logs the count. Clients are never auto-deleted. The privacy policy states this period.
-3. **Daily reminder push.** A Vercel Cron job each night at **11:00 pm IST** (`30 17 * * *`, since Vercel Cron runs in UTC) sends one notification looking ahead to tomorrow: calls and follow-ups due tomorrow, overdue payments, proposals expiring this week, and new leads not contacted for over 24 h. It only sends when there's something to act on.
+3. **Daily reminder push. ✅ Built:** `GET /v1/cron/daily-brief`, scheduled in `vercel.json` each night at **11:00 pm IST** (`30 17 * * *`, since Vercel Cron runs in UTC; on the Hobby plan it may fire any time in that hour), authorised by `CRON_SECRET`. It sends one notification looking ahead to tomorrow: calls and follow-ups due tomorrow, overdue payments, proposals expiring this week, and new leads not contacted for over 24 h. It only sends when there's something to act on. E.g. "Tomorrow: 1 call, 2 follow-ups" / "AUD 1,500 overdue · 1 quote expiring".
+
+### Push notifications ✅ Built
+
+`app/services/push.py` sends through the FCM HTTP v1 API with the service account in
+`FIREBASE_SERVICE_ACCOUNT` (skipped while unset; a push failure never fails a request). It sends to every
+device registered with `POST /v1/admin/devices` and deletes tokens FCM reports as unregistered.
+
+| Notification | Sent when | Android channel | `data.route` |
+|---|---|---|---|
+| "Jane (AU) booked a call" / "Thu 6 Nov, 3:30 pm IST · message" | Website booking (or webhook backfill) | `new_leads` (high) | `/leads/{id}` |
+| "New enquiry: Sam" / message | Website enquiry | `new_leads` (high) | `/leads/{id}` |
+| "Call cancelled: Jane" / "Call moved: Jane" | Cal.com webhook, after its commit | `bookings` (high) | `/leads/{id}` |
+| "Tomorrow: 1 call, 2 follow-ups" | Daily brief | `daily_brief` (normal) | `/today` |
+
+Every message also carries `data.channel`, `data.type` (`new_lead`, `booking_cancelled`, `booking_rescheduled`, `daily_brief`) and `data.lead_id` where relevant.
 
 ## 8. Neon setup checklist (for you)
 

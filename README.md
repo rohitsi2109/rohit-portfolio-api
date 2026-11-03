@@ -34,6 +34,12 @@ docker run -d --name portfolio-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=
    the same secret as `CAL_WEBHOOK_SECRET`, and enable *Booking created*, *Booking cancelled*,
    *Booking rescheduled*, *Meeting ended* and *No-show updated*.
 5. In the website's Vercel project, set `VITE_API_URL=https://api.rohitsingh.in` and redeploy.
+6. Push notifications: in the Firebase project that the Android app uses, generate a service account
+   key and paste its JSON (one line) into `FIREBASE_SERVICE_ACCOUNT`. Push is skipped while it's empty.
+7. Daily brief: set `CRON_SECRET` to a long random value. `vercel.json` schedules
+   `/v1/cron/daily-brief` for `30 17 * * *` (UTC) = 11 pm IST. On the Hobby plan Vercel may run it any
+   time within that hour (11:00 to 11:59 pm IST). To test it:
+   `curl -H "Authorization: Bearer $CRON_SECRET" https://api.rohitsingh.in/v1/cron/daily-brief`.
 
 ## Booking flow notes
 

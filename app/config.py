@@ -26,7 +26,10 @@ class Settings(BaseSettings):
     # "Today" for due dates and overdue payments (the client_summary view uses the same zone)
     business_timezone: str = "Asia/Kolkata"
 
+    # The service account key JSON (one line) for Firebase Cloud Messaging; push is off without it
     firebase_service_account: str = ""
+    # Vercel Cron sends "Authorization: Bearer <CRON_SECRET>"; the cron routes refuse anything else
+    cron_secret: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import admin, auth, public, webhooks
+from app.routers import admin, auth, cron, public, webhooks
 
 logging.basicConfig(level=logging.INFO)
 
@@ -36,6 +36,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks.router)
     app.include_router(auth.router)
     app.include_router(admin.router)
+    app.include_router(cron.router)
     return app
 
 

@@ -33,7 +33,7 @@ from sqlalchemy import text  # noqa: E402
 from app.db import get_engine, get_sessionmaker  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AdminUser  # noqa: E402
-from app.services import cal  # noqa: E402
+from app.services import cal, ratelimit  # noqa: E402
 from app.services.security import hash_password  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +54,13 @@ def schema():
 def clean():
     with get_engine().begin() as conn:
         conn.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+
+
+@pytest.fixture(autouse=True)
+def pinned_rate_limit_clock(monkeypatch):
+    # Mid-window, so a test's requests always land in the same rate-limit window
+    at = ratelimit.window_start(datetime.now(UTC), 3600) + timedelta(seconds=1800)
+    monkeypatch.setattr(ratelimit, "_now", lambda: at)
 
 
 @pytest.fixture

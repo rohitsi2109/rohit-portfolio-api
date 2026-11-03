@@ -2,18 +2,20 @@
 
 import base64
 import json
+import re
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import and_, case, column, func, or_, select, table, true, tuple_
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Text, and_, case, column, func, or_, select, table, true, tuple_
+from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import get_settings
 from app.db import get_db
 from app.models import (
     AdminUser,
@@ -28,11 +30,13 @@ from app.models import (
     PushDevice,
 )
 from app.schemas import (
+    BookingOut,
     ClientDetail,
     ClientLeadOut,
     ClientSummaryOut,
     ClientUpdate,
     ContactedRequest,
+    ContactMatch,
     ContactOut,
     ContactUpdate,
     ConvertRequest,
@@ -61,6 +65,11 @@ from app.schemas import (
     SourceChannel,
     Stats,
     Temperature,
+    TemperatureCounts,
+    TodayCall,
+    TodayCounts,
+    TodayOut,
+    TodayProposal,
 )
 from app.services.leads import OPEN_STATUSES, convert_lead, log_event, mark_contacted, now
 from app.services.leads import today as local_today
@@ -115,6 +124,26 @@ def decode_cursor(cursor: str) -> tuple[int, datetime, uuid.UUID]:
         raise HTTPException(400, "Invalid cursor")
 
 
+def next_booking_at():
+    """Soonest upcoming confirmed call of the lead in the outer query."""
+    return (
+        select(func.min(Booking.start_at))
+        .where(Booking.lead_id == Lead.id, Booking.status == "confirmed", Booking.start_at >= func.now())
+        .correlate(Lead).scalar_subquery()
+    )
+
+
+def lead_items(db: Session, stmt) -> list[LeadListItem]:
+    """Run a select(Lead) (joined to Contact) and return list items with next_booking_at filled in."""
+    rows = db.execute(stmt.add_columns(next_booking_at()).options(selectinload(Lead.contact))).all()
+    items = []
+    for lead, next_at in rows:
+        item = LeadListItem.model_validate(lead)
+        item.next_booking_at = next_at
+        items.append(item)
+    return items
+
+
 @router.get("/leads", response_model=LeadPage)
 def list_leads(
     db: Session = Depends(get_db),
@@ -134,41 +163,37 @@ def list_leads(
     cursor: str | None = None,
     limit: int = Query(30, ge=1, le=100),
 ):
-    rank = TEMPERATURE_RANK.label("rank")
-    next_booking = (
-        select(func.min(Booking.start_at))
-        .where(Booking.lead_id == Lead.id, Booking.status == "confirmed", Booking.start_at >= func.now())
-        .correlate(Lead).scalar_subquery()
-    )
-    stmt = select(Lead, rank, next_booking).join(Lead.contact).options(selectinload(Lead.contact))
+    # Every filter except temperature: the pill counts are computed over these
+    conds = [Lead.status.in_(status) if status else Lead.status.in_(OPEN_STATUSES)]
+    if type:
+        conds.append(Lead.type.in_(type))
+    if channel:
+        conds.append(Lead.source_channel.in_(channel))
+    if source:
+        conds.append(Lead.utm_source == source)
+    if tag:
+        conds.append(Lead.tags.contains([tag]))
+    if country:
+        conds.append(Lead.visitor_country == country.upper())
+    if referred_by:
+        conds.append(Lead.referred_by_client_id == referred_by)
+    if q:
+        like = f"%{q.strip()}%"
+        conds.append(or_(Contact.name.ilike(like), Contact.email.ilike(like), Contact.phone_e164.ilike(like),
+                         Contact.company.ilike(like)))
+    if from_:
+        conds.append(Lead.created_at >= from_)
+    if to:
+        conds.append(Lead.created_at < to)
+    if follow_up_due:
+        conds.append(Lead.next_follow_up_at <= func.now())
 
-    stmt = stmt.where(Lead.status.in_(status) if status else Lead.status.in_(OPEN_STATUSES))
+    rank = TEMPERATURE_RANK.label("rank")
+    stmt = select(Lead, rank, next_booking_at()).join(Lead.contact).options(selectinload(Lead.contact)).where(*conds)
     if temperature:
         rated = [t for t in temperature if t != "unrated"]
         stmt = stmt.where(or_(Lead.temperature.in_(rated),
                               *([Lead.temperature.is_(None)] if "unrated" in temperature else [])))
-    if type:
-        stmt = stmt.where(Lead.type.in_(type))
-    if channel:
-        stmt = stmt.where(Lead.source_channel.in_(channel))
-    if source:
-        stmt = stmt.where(Lead.utm_source == source)
-    if tag:
-        stmt = stmt.where(Lead.tags.contains([tag]))
-    if country:
-        stmt = stmt.where(Lead.visitor_country == country.upper())
-    if referred_by:
-        stmt = stmt.where(Lead.referred_by_client_id == referred_by)
-    if q:
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Contact.name.ilike(like), Contact.email.ilike(like), Contact.phone_e164.ilike(like),
-                              Contact.company.ilike(like)))
-    if from_:
-        stmt = stmt.where(Lead.created_at >= from_)
-    if to:
-        stmt = stmt.where(Lead.created_at < to)
-    if follow_up_due:
-        stmt = stmt.where(Lead.next_follow_up_at <= func.now())
     if cursor:
         c_rank, c_created, c_id = decode_cursor(cursor)
         stmt = stmt.where(or_(TEMPERATURE_RANK > c_rank,
@@ -185,7 +210,13 @@ def list_leads(
     if len(rows) > limit:
         last, last_rank, _ = rows[limit - 1]
         next_cursor = encode_cursor(last_rank, last.created_at, last.id)
-    return LeadPage(items=items, next_cursor=next_cursor)
+
+    counts = None
+    if cursor is None:
+        bucket = func.coalesce(Lead.temperature, "unrated")
+        counts = TemperatureCounts(**dict(db.execute(
+            select(bucket, func.count()).join(Lead.contact).where(*conds).group_by(bucket)).all()))
+    return LeadPage(items=items, next_cursor=next_cursor, counts=counts)
 
 
 @router.post("/leads", response_model=ManualLeadCreated, status_code=201)
@@ -365,19 +396,22 @@ def contacted(lead_id: uuid.UUID, body: ContactedRequest, db: Session = Depends(
 # ---------------------------------------------------------------------------
 
 def client_summary_table():
-    cols = ["client_id", "name", "email", "phone_e164", "company", "country", "converted_at", "tags",
+    cols = ["client_id", "name", "email", "phone_e164", "company", "country", "converted_at",
             "project_count", "active_projects", "last_project_at", "contracted_value", "total_paid",
             "outstanding", "overdue", "referrals_sent"]
-    return table("client_summary", *[column(c) for c in cols])
+    return table("client_summary", *[column(c) for c in cols], column("tags", ARRAY(Text)))
 
 
 @router.get("/clients", response_model=list[ClientSummaryOut])
 def list_clients(db: Session = Depends(get_db), _: AdminUser = Admin, country: str | None = None,
-                 q: str | None = None, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+                 q: str | None = None, tag: str | None = None,
+                 limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
     cs = client_summary_table()
     stmt = select(cs)
     if country:
         stmt = stmt.where(cs.c.country == country.upper())
+    if tag:
+        stmt = stmt.where(cs.c.tags.contains([tag]))
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(cs.c.name.ilike(like), cs.c.email.ilike(like), cs.c.company.ilike(like)))
@@ -461,11 +495,11 @@ def update_payment(payment_id: uuid.UUID, body: PaymentUpdate, db: Session = Dep
     return payment
 
 
-@router.get("/payments", response_model=list[PaymentListItem])
-def list_payments(db: Session = Depends(get_db), _: AdminUser = Admin,
-                  state: Literal["overdue", "due_soon", "pending", "received"] = "pending",
-                  due_soon_days: int = Query(14, ge=1, le=90),
-                  received_since: date | None = Query(None, description="state=received only; default: 90 days ago")):
+PaymentState = Literal["overdue", "due_soon", "pending", "received"]
+
+
+def payment_items(db: Session, state: PaymentState, due_soon_days: int = 14,
+                  received_since: date | None = None) -> list[PaymentListItem]:
     today = local_today()
     stmt = (select(Payment, Project.title, Client.id, Contact.name)
             .join(Project, Payment.project_id == Project.id)
@@ -488,6 +522,78 @@ def list_payments(db: Session = Depends(get_db), _: AdminUser = Admin,
                         is_overdue=p.status == "pending" and p.due_on is not None and p.due_on < today)
         for p, title, cid, name in rows
     ]
+
+
+@router.get("/payments", response_model=list[PaymentListItem])
+def list_payments(db: Session = Depends(get_db), _: AdminUser = Admin,
+                  state: PaymentState = "pending",
+                  due_soon_days: int = Query(14, ge=1, le=90),
+                  received_since: date | None = Query(None, description="state=received only; default: 90 days ago")):
+    return payment_items(db, state, due_soon_days, received_since)
+
+
+# ---------------------------------------------------------------------------
+# Today
+# ---------------------------------------------------------------------------
+
+@router.get("/today", response_model=TodayOut)
+def today_screen(db: Session = Depends(get_db), _: AdminUser = Admin):
+    """The Today screen in one call. "Today" is the business day (IST), the same day the
+    overdue rules use."""
+    settings = get_settings()
+    today = local_today()
+    day_start = datetime.combine(today, time.min, tzinfo=ZoneInfo(settings.business_timezone))
+    end_of_today = day_start + timedelta(days=1)
+    end_of_tomorrow = day_start + timedelta(days=2)
+    open_lead = Lead.status.in_(OPEN_STATUSES)
+    new_lead = and_(Lead.status == "new", Lead.first_contacted_at.is_(None))
+    follow_up_due = and_(open_lead, Lead.next_follow_up_at < end_of_today)
+
+    new_leads = lead_items(db, select(Lead).join(Lead.contact).where(new_lead).order_by(Lead.created_at).limit(50))
+    follow_ups = lead_items(db, select(Lead).join(Lead.contact).where(follow_up_due)
+                            .order_by(Lead.next_follow_up_at).limit(50))
+
+    call_rows = db.execute(
+        select(Booking, Lead.id, Contact)
+        .join(Lead, Booking.lead_id == Lead.id).join(Contact, Lead.contact_id == Contact.id)
+        .where(Booking.status == "confirmed", Booking.start_at >= func.now(), Booking.start_at < end_of_tomorrow)
+        .order_by(Booking.start_at)).all()
+    calls = [TodayCall(booking=BookingOut.model_validate(b), lead_id=lead_id, contact=ContactOut.model_validate(c))
+             for b, lead_id, c in call_rows]
+
+    proposal_rows = db.execute(
+        select(Proposal, Contact)
+        .join(Lead, Proposal.lead_id == Lead.id).join(Contact, Lead.contact_id == Contact.id)
+        .where(Proposal.status == "sent", Proposal.valid_until <= today + timedelta(days=7))
+        .order_by(Proposal.valid_until)).all()
+    proposals = [TodayProposal(**ProposalOut.model_validate(p).model_dump(), contact=ContactOut.model_validate(c),
+                               is_expired=p.valid_until < today)
+                 for p, c in proposal_rows]
+
+    overdue = payment_items(db, "overdue")
+    overdue_totals: dict[str, Decimal] = {}
+    for item in overdue:
+        overdue_totals[item.currency] = overdue_totals.get(item.currency, Decimal(0)) + item.amount
+
+    new_count, hot_count, follow_up_count = db.execute(select(
+        func.count().filter(new_lead),
+        func.count().filter(open_lead, Lead.temperature == "hot"),
+        func.count().filter(follow_up_due),
+    )).one()
+
+    return TodayOut(
+        date=today,
+        timezone=settings.business_timezone,
+        counts=TodayCounts(new_leads=new_count, hot_leads=hot_count, follow_ups_due=follow_up_count,
+                           calls_today=sum(1 for c in calls if c.booking.start_at < end_of_today),
+                           overdue=overdue_totals),
+        new_leads=new_leads,
+        follow_ups_due=follow_ups,
+        calls=calls,
+        payments_overdue=overdue,
+        payments_due_soon=payment_items(db, "due_soon", due_soon_days=7),
+        proposals_expiring=proposals,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +685,39 @@ def register_device(body: DeviceRegister, db: Session = Depends(get_db), admin: 
     db.execute(stmt)
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/contacts", response_model=list[ContactMatch])
+def find_contacts(db: Session = Depends(get_db), _: AdminUser = Admin,
+                  email: str | None = Query(None, description="Exact match, case-insensitive"),
+                  phone: str | None = Query(None, description="E.164, e.g. +61412345678")):
+    """Duplicate check for "Add lead": existing contacts with this email and/or phone number."""
+    email = (email or "").strip() or None
+    phone = re.sub(r"[\s()-]", "", phone or "") or None
+    if not email and not phone:
+        raise HTTPException(422, "Pass email or phone")
+    conds = []
+    if email:
+        conds.append(Contact.email == email)
+    if phone:
+        conds.append(Contact.phone_e164 == phone)
+    contacts = db.scalars(select(Contact).where(or_(*conds)).order_by(Contact.created_at).limit(10)).all()
+
+    matches = []
+    for c in contacts:
+        open_leads, last_lead_at = db.execute(
+            select(func.count().filter(Lead.status.in_(OPEN_STATUSES)), func.max(Lead.created_at))
+            .where(Lead.contact_id == c.id)).one()
+        matched_on = []
+        if email and c.email and c.email.lower() == email.lower():
+            matched_on.append("email")
+        if phone and c.phone_e164 == phone:
+            matched_on.append("phone")
+        matches.append(ContactMatch(
+            contact=ContactOut.model_validate(c), matched_on=matched_on,
+            client_id=db.scalar(select(Client.id).where(Client.contact_id == c.id)),
+            open_leads=open_leads, last_lead_at=last_lead_at))
+    return matches
 
 
 @router.patch("/contacts/{contact_id}", response_model=ContactOut)

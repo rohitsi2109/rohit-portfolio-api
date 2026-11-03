@@ -113,14 +113,17 @@ because webhooks upsert by `cal_booking_uid`.
 | POST | `/v1/auth/login` | email + password → access + refresh tokens |
 | POST | `/v1/auth/refresh` | Rotates the refresh token |
 | POST | `/v1/auth/logout` | Revokes the refresh token |
-| GET | `/v1/admin/leads` | Default: open leads only. Filters: `status`, `temperature`, `type`, `channel`, `source`, `tag`, `country`, `referred_by`, `q` (name/email/phone), `from`, `to`, `follow_up_due`; cursor pagination |
+| GET | `/v1/auth/sessions` | Signed-in devices: label, signed in, last active, `is_current` |
+| DELETE | `/v1/auth/sessions/{id}` | Log a device out (lost phone); it can't refresh again, and its access token lapses within 15 min |
+| GET | `/v1/admin/today` | The Today screen in one call (IST day): new uncontacted leads, follow-ups due, calls today + tomorrow, payments overdue / due in 7 days, proposals expiring in 7 days (or lapsed), and counts |
+| GET | `/v1/admin/leads` | Default: open leads only. Filters: `status`, `temperature`, `type`, `channel`, `source`, `tag`, `country`, `referred_by`, `q` (name/email/phone), `from`, `to`, `follow_up_due`; cursor pagination. First page also returns `counts` per temperature (ignoring the temperature filter) for the pills |
 | POST | `/v1/admin/leads` | Add a manual lead (WhatsApp, LinkedIn, referral...). Warns if the email or phone matches an existing contact |
 | GET | `/v1/admin/leads/{id}` | Lead + contact + bookings + proposals + notes + events |
 | PATCH | `/v1/admin/leads/{id}` | status, temperature, tags, estimated_value, currency, lost_reason + lost_comment, referred_by_client_id, next_follow_up_at |
 | POST | `/v1/admin/leads/{id}/proposals` | Record a quote |
 | PATCH | `/v1/admin/proposals/{id}` | Mark sent / accepted / declined / expired |
 | POST | `/v1/admin/leads/{id}/convert` | Marks as won and creates the client + project in one step. Body: project title, value, currency, company |
-| GET | `/v1/admin/clients` | Converted leads (from `client_summary`), newest first; filter by `country`, `q` |
+| GET | `/v1/admin/clients` | Converted leads (from `client_summary`), newest first; filter by `country`, `tag`, `q` |
 | GET | `/v1/admin/clients/{id}` | Client + contact + projects + the original lead history |
 | PATCH | `/v1/admin/clients/{id}` | company, industry, testimonial, testimonial_approved, show_on_portfolio, notes |
 | POST | `/v1/admin/clients/{id}/projects` | Add repeat work for an existing client |
@@ -132,6 +135,7 @@ because webhooks upsert by `cal_booking_uid`.
 | POST | `/v1/admin/leads/{id}/contacted` | Sets `last_contacted_at` and logs an event (tapped call / WhatsApp / email in the app) |
 | GET | `/v1/admin/stats?from&to` | Leads by status, channel, source and country; conversion rate; average response time; lost reasons; proposal win rate; money received / outstanding per currency; top referring clients |
 | POST | `/v1/admin/devices` | Register an FCM token |
+| GET | `/v1/admin/contacts?email&phone` | Duplicate check for "Add lead": matching contacts, what matched, client id, open leads |
 | PATCH | `/v1/admin/contacts/{id}` | Correct name, email, phone, company, timezone (the website never changes an existing contact) |
 | DELETE | `/v1/admin/contacts/{id}` | Privacy erasure |
 
@@ -195,8 +199,9 @@ rohit-portfolio-api/
 
 ### Flutter app: token refresh rule (phase 2)
 
-The API treats a reused refresh token as stolen and **ends every session** for that admin. So the
-app must never send two refreshes at once (e.g. two API calls both getting a 401 at the same moment):
+The API treats a reused **rotated** refresh token as stolen and **ends every session** for that admin
+(`refresh_tokens.revoked_reason = 'rotated'`; tokens ended by logout or "log out device" are just refused).
+So the app must never send two refreshes at once (e.g. two API calls both getting a 401 at the same moment):
 - Run refresh through a **single-flight lock**: the first caller refreshes; any others wait for that
   same result and retry with the new access token.
 - Save the new refresh token (secure storage) **before** releasing the lock, so no caller ever sends

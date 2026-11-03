@@ -66,5 +66,39 @@ def test_edit_contact(client, auth, fake_cal):
 
 def test_logout(client, admin_user):
     tokens = login(client)
+    other = login(client)
     assert client.post("/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}).status_code == 204
     assert client.post("/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).status_code == 401
+    # A logged-out token being sent again isn't theft: other devices stay signed in
+    assert client.post("/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}).status_code == 200
+
+
+def bearer(tokens):
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+
+def test_sessions_list_and_log_out_a_device(client, admin_user):
+    phone = login(client)
+    tablet = client.post("/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD,
+                                                 "device_label": "Tablet"}).json()
+    # Refreshing keeps the session's sign-in time and marks it active now
+    phone = client.post("/v1/auth/refresh", json={"refresh_token": phone["refresh_token"]}).json()
+
+    sessions = client.get("/v1/auth/sessions", headers=bearer(phone)).json()
+    assert sorted(s["device_label"] for s in sessions) == ["Pixel 8", "Tablet"]
+    current = [s for s in sessions if s["is_current"]]
+    assert len(current) == 1 and current[0]["device_label"] == "Pixel 8"
+    assert current[0]["signed_in_at"] <= current[0]["last_active_at"]
+
+    tablet_id = next(s["id"] for s in sessions if s["device_label"] == "Tablet")
+    assert client.delete(f"/v1/auth/sessions/{tablet_id}", headers=bearer(phone)).status_code == 204
+    assert client.delete(f"/v1/auth/sessions/{tablet_id}", headers=bearer(phone)).status_code == 404
+
+    # The tablet can't refresh any more, and that doesn't end the phone's session
+    assert client.post("/v1/auth/refresh", json={"refresh_token": tablet["refresh_token"]}).status_code == 401
+    assert [s["device_label"] for s in client.get("/v1/auth/sessions", headers=bearer(phone)).json()] == ["Pixel 8"]
+    assert client.post("/v1/auth/refresh", json={"refresh_token": phone["refresh_token"]}).status_code == 200
+
+
+def test_sessions_need_a_token(client, admin_user):
+    assert client.get("/v1/auth/sessions").status_code == 401

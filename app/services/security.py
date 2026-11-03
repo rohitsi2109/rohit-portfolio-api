@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt
 from argon2 import PasswordHasher
@@ -40,10 +41,13 @@ def _jwt_secret() -> str:
     return secret
 
 
-def create_access_token(admin_user_id: uuid.UUID) -> tuple[str, int]:
+def create_access_token(admin_user_id: uuid.UUID, session_id: uuid.UUID) -> tuple[str, int]:
+    """`sid` is the refresh-token row the session currently holds, so /v1/auth/sessions can mark
+    "this device". Revoking a session stops refreshes; its access token lapses within its TTL."""
     ttl = get_settings().access_token_minutes * 60
     now = datetime.now(UTC)
-    claims = {"sub": str(admin_user_id), "type": "access", "iat": now, "exp": now + timedelta(seconds=ttl)}
+    claims = {"sub": str(admin_user_id), "sid": str(session_id), "type": "access", "iat": now,
+              "exp": now + timedelta(seconds=ttl)}
     return jwt.encode(claims, _jwt_secret(), algorithm="HS256"), ttl
 
 
@@ -58,20 +62,28 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def current_admin(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: Session = Depends(get_db),
-) -> AdminUser:
-    unauthorized = HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated",
-                                 headers={"WWW-Authenticate": "Bearer"})
+def _unauthorized() -> HTTPException:
+    return HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
+
+
+def access_claims(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict[str, Any]:
+    """The verified claims of the request's access token."""
     if creds is None:
-        raise unauthorized
+        raise _unauthorized()
     try:
         claims = jwt.decode(creds.credentials, _jwt_secret(), algorithms=["HS256"])
-        if claims.get("type") != "access":
-            raise unauthorized
+    except jwt.PyJWTError:
+        raise _unauthorized()
+    if claims.get("type") != "access":
+        raise _unauthorized()
+    return claims
+
+
+def current_admin(claims: dict[str, Any] = Depends(access_claims), db: Session = Depends(get_db)) -> AdminUser:
+    unauthorized = _unauthorized()
+    try:
         admin_id = uuid.UUID(claims["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError):
+    except (KeyError, ValueError):
         raise unauthorized
     admin = db.get(AdminUser, admin_id)
     if admin is None or not admin.is_active:

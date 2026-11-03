@@ -106,6 +106,16 @@ class TokenPair(BaseModel):
     expires_in: int
 
 
+class SessionOut(BaseModel):
+    """A signed-in device."""
+    id: uuid.UUID
+    device_label: str | None
+    signed_in_at: datetime
+    last_active_at: datetime  # last token refresh
+    expires_at: datetime
+    is_current: bool  # the device making this request
+
+
 # ---------------------------------------------------------------------------
 # Admin: shared shapes
 # ---------------------------------------------------------------------------
@@ -194,9 +204,19 @@ class LeadListItem(LeadFields):
     next_booking_at: datetime | None = None
 
 
+class TemperatureCounts(BaseModel):
+    hot: int = 0
+    warm: int = 0
+    cold: int = 0
+    unrated: int = 0
+
+
 class LeadPage(BaseModel):
     items: list[LeadListItem]
     next_cursor: str | None
+    # Leads per temperature for the same filters, ignoring the temperature filter itself (for the
+    # Hot / Warm / Cold pills). First page only; null when a cursor is passed.
+    counts: TemperatureCounts | None = None
 
 
 class LeadDetail(LeadFields):
@@ -257,6 +277,15 @@ class LeadUpdate(BaseModel):
     lost_comment: str | None = None
     referred_by_client_id: uuid.UUID | None = None
     next_follow_up_at: datetime | None = None
+
+
+class ContactMatch(BaseModel):
+    """An existing contact that shares an email or phone number with what's being typed."""
+    contact: ContactOut
+    matched_on: list[Literal["email", "phone"]]
+    client_id: uuid.UUID | None
+    open_leads: int
+    last_lead_at: datetime | None
 
 
 class ContactUpdate(BaseModel):
@@ -446,6 +475,42 @@ class PaymentListItem(PaymentOut):
     client_id: uuid.UUID
     client_name: str
     is_overdue: bool
+
+
+# ---------------------------------------------------------------------------
+# Admin: today
+# ---------------------------------------------------------------------------
+
+class TodayCall(BaseModel):
+    booking: BookingOut
+    lead_id: uuid.UUID
+    contact: ContactOut
+
+
+class TodayProposal(ProposalOut):
+    contact: ContactOut
+    is_expired: bool  # valid_until has passed but it's still marked sent
+
+
+class TodayCounts(BaseModel):
+    new_leads: int
+    hot_leads: int
+    follow_ups_due: int
+    calls_today: int
+    overdue: dict[str, Decimal]  # per currency
+
+
+class TodayOut(BaseModel):
+    """Everything the app's Today screen needs, in one call. Dates are in the business timezone (IST)."""
+    date: date
+    timezone: str
+    counts: TodayCounts
+    new_leads: list[LeadListItem]  # status new and never contacted, oldest first
+    follow_ups_due: list[LeadListItem]  # open leads with a follow-up due by the end of today, earliest first
+    calls: list[TodayCall]  # confirmed calls today and tomorrow, soonest first
+    payments_overdue: list[PaymentListItem]
+    payments_due_soon: list[PaymentListItem]  # due in the next 7 days
+    proposals_expiring: list[TodayProposal]  # sent, valid until within 7 days (or already lapsed)
 
 
 # ---------------------------------------------------------------------------

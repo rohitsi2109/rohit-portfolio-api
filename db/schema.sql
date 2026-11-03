@@ -379,14 +379,20 @@ CREATE TRIGGER admin_users_updated_at BEFORE UPDATE ON admin_users
 
 -- Long-lived refresh tokens for the Flutter app (short-lived JWT access tokens are not stored).
 -- Stored hashed, so a database leak does not leak usable tokens. Revoke = log a lost phone out.
+-- Each refresh rotates the token: the old row is revoked ('rotated') and a new row continues the
+-- session (same session_started_at). Only a 'rotated' token being used again counts as theft.
 CREATE TABLE refresh_tokens (
-    id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-    admin_user_id   uuid        NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
-    token_hash      text        NOT NULL UNIQUE,     -- sha256 of the token
-    device_label    text,                            -- e.g. 'Pixel 8'
-    expires_at      timestamptz NOT NULL,
-    revoked_at      timestamptz,
-    created_at      timestamptz NOT NULL DEFAULT now()
+    id                  uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_user_id       uuid        NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    token_hash          text        NOT NULL UNIQUE, -- sha256 of the token
+    device_label        text,                        -- e.g. 'Pixel 8 · LMS 1.0.0'
+    session_started_at  timestamptz NOT NULL DEFAULT now(),  -- when this device logged in
+    expires_at          timestamptz NOT NULL,
+    revoked_at          timestamptz,
+    revoked_reason      text CHECK (revoked_reason IN ('rotated', 'logout', 'revoked', 'reuse_detected')),
+    created_at          timestamptz NOT NULL DEFAULT now(),  -- = last refresh of the session
+
+    CONSTRAINT refresh_tokens_revoked_reason_chk CHECK ((revoked_at IS NULL) = (revoked_reason IS NULL))
 );
 
 CREATE INDEX refresh_tokens_user_idx ON refresh_tokens (admin_user_id) WHERE revoked_at IS NULL;

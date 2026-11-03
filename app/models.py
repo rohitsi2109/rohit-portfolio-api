@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     Date,
     FetchedValue,
@@ -17,7 +16,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -235,8 +234,11 @@ class RefreshToken(Base):
     admin_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admin_users.id", ondelete="CASCADE"))
     token_hash: Mapped[str] = mapped_column(Text, unique=True)
     device_label: Mapped[str | None] = mapped_column(Text)
+    session_started_at: Mapped[datetime] = mapped_column(server_default=func.now())
     expires_at: Mapped[datetime]
     revoked_at: Mapped[datetime | None]
+    # 'rotated' | 'logout' | 'revoked' | 'reuse_detected'
+    revoked_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at()
 
     admin_user: Mapped[AdminUser] = relationship()
